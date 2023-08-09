@@ -1,0 +1,464 @@
+import os
+from datetime import datetime
+from pytorch_lightning import loggers as pl_loggers
+from lightning_subset.module import GANLabelModel
+from lightning_subset.datamodule import LFDataModule, JSONImageDataset
+from lightning_subset.lutils import (
+    get_datasets,
+    load_domainnet_lfs,
+    load_awa_lfs,
+    create_L_ind
+)
+from argparse import ArgumentParser, Namespace
+from pytorch_lightning.trainer import Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.strategies import DDPStrategy
+import numpy as np
+import torch
+import warnings
+
+
+def main(args: Namespace) -> None:
+    args.save_suffix = f"budget_{args.budget}_sub_{args.alpha_weight_subModular}" ## saving image in particular folder
+    storedir = args.storedir
+    os.makedirs(storedir, exist_ok=True)
+    os.makedirs(os.path.join(storedir, "wsganlogs"), exist_ok=True)
+    os.makedirs(os.path.join(storedir, "lfmodel"), exist_ok=True)
+    max_n_fake = int(max(args.fake_data_sizes))
+    # name for subfolder to save to
+    datasetsavename = args.dataset
+    # ------------------------
+    # Determine dataset, load data and LF outputs
+    # ------------------------
+    train_idxs = None
+    drop_last = args.droplast
+    architecture = args.architecture
+    latent_dim = args.latent_dim
+    if args.dataset.lower() in ["awa2", "awa", "domainnet"]:
+        if args.imgsize == 32:
+            img_shape = (3, 32, 32)
+            augment_style = "cifar"
+        elif args.imgsize == 64:
+            img_shape = (3, 64, 64)
+            augment_style = "cifar64"
+            architecture += "64"
+        else:
+            raise NotImplementedError("img size selected not implemented. Check StyleWSGAN repository instead.")
+
+        if args.dataset.lower() in "awa2":
+            img_root = args.data_path  # path to images
+            dset_lfs = args.lffname # labeling function file, saved as json
+            fileName = args.lffname
+            if not dset_lfs.endswith(".json"):
+                dset_lfs = os.path.join(dset_lfs, "train.json")
+                dset_valid = os.path.join(fileName, "valid.json")
+            datasetsavename = "awa2"
+            n_classes = 10
+            Lambdas, Ytrue, train_idxs = load_awa_lfs(dset_lfs) 
+        elif args.dataset.lower() == "domainnet":
+            img_root = args.data_path  # path to images
+            dset_lfs = args.lffname # labeling function file, saved as json
+            fileName = args.lffname
+            if not dset_lfs.endswith(".json"):
+                dset_lfs = os.path.join(dset_lfs, "train.json")
+                dset_valid = os.path.join(fileName, "valid.json")
+
+            datasetsavename = "domainnet"
+            n_classes = 10
+            # drop_last = True  # number of train images leads to last batch of size 1
+            # load train LFs
+            Lambdas, Ytrue, train_idxs = load_domainnet_lfs(dset_lfs, applythreshold=False)
+        else:
+            raise NotImplementedError("dataset not found")
+
+        num_LFs = Lambdas.shape[1]
+        val = all(train_idxs[i] <= train_idxs[i+1] for i in range(len(train_idxs) - 1)) ## check if the lisit is sorted
+            #print(val)
+        if(val):
+            pass 
+        else:
+            raise Exception("list index is not sorted, embedding mapping can get wrong..")
+
+        dirAdd = os.path.dirname(dset_lfs)
+        baseName = os.path.basename(dset_lfs)
+        print(baseName)
+        assert(baseName == "train.json")
+        embedPath = os.path.join(dirAdd, "train_embedding.pt")
+        [embedding] = torch.load(embedPath,  map_location=lambda storage, loc: storage)
+
+        # set up datasets
+        trainset_sub = JSONImageDataset(
+            jsonpath=dset_lfs,
+            img_root=img_root,
+            transform=None,
+            size=img_shape[1:],
+        )
+
+        testdataset = JSONImageDataset(
+            jsonpath=dset_valid,
+            img_root=img_root,
+            transform=None,
+            size=img_shape[1:],
+        )
+    else:
+        # ------------------------
+        # pytorch vision dataset
+        # ------------------------
+
+        traindataset, testdataset, img_shape, n_classes, augment_style = get_datasets(
+            args, basetransforms=False
+        )
+
+        if args.dataset.lower() == "gtsrb":
+            architecture += "64"
+
+        # ------------------------
+        # Load fixed LFs
+        # ------------------------
+        print("loading fixed LFs from %s" % args.lffname)
+        # load precomputed LFs and training indices
+        # Lambedas is the LF output matrix
+
+        # try:
+        #     (
+        #         train_idxs,
+        #         val_idxs,
+        #         Lambdas,
+        #         LF_accuracies,
+        #         LF_propensity,
+        #         LF_labels,
+        #         ValLambdas,
+        #     ) = torch.load(args.lffname, map_location=lambda storage, loc: storage)
+        # except ValueError:
+        #     (
+        #         train_idxs,
+        #         val_idxs,
+        #         Lambdas,
+        #         LF_accuracies,
+        #         LF_propensity,
+        #         LF_labels,
+        #         train_psuedo_oh,
+        #         train_psuedo_filters
+        #     ) = torch.load(args.lffname, map_location=lambda storage, loc: storage)
+
+        # (train_idxs,
+        #  val_idxs,
+        # Lambdas,
+        # LF_accuracies,
+        # LF_propensity,
+        # LF_labels,
+        # train_psuedo_oh, 
+        # train_psuedo_filters) = torch.load(args.lffname, map_location=lambda storage, loc: storage)
+
+        (train_idxs,
+        val_idxs,
+        Lambdas,
+        LF_accuracies,
+        LF_propensity,
+        LF_labels, embedding) = torch.load(args.lffname, map_location=lambda storage, loc: storage)
+
+
+        # choose subset of LFs.
+        # Loaded LFs were already randomized, so choose by increasing index
+        max_lfs = args.numlfs
+        tmp_num_lfs = Lambdas.shape[1]
+        if tmp_num_lfs > max_lfs:
+            lfidxs = np.arange(max_lfs)
+            print("Chosen LF indexes:\n", lfidxs)
+            Lambdas = Lambdas[:, lfidxs]
+            if isinstance(LF_accuracies, list):
+                LF_accuracies = np.array(LF_accuracies)
+            LF_accuracies = LF_accuracies[lfidxs]
+        if tmp_num_lfs < max_lfs:
+            warnings.warn(
+                "WARNING: max number of LFs chosen greater than available number of LFs"
+            )
+
+        num_LFs = Lambdas.shape[1]
+        datasetsavename = datasetsavename + "_%dlfs" % num_LFs
+        trainset_sub = torch.utils.data.Subset(traindataset, train_idxs)
+
+        ## TODO :  assert to ensure that the test data is not same as train data 
+        # print
+        # train
+        #testset_sub = np.arange(traindataset)  
+
+    # create a torch tensor of the LF outputs
+    if Lambdas is not None:
+        lambda_tensor = torch.tensor(Lambdas, requires_grad=False).float()
+        # set up the indicator vector of non-abstains (i.e. at least one LF vote available for sample)
+        full_filter_idx = lambda_tensor.sum(1) != 0
+        print("Num samples with non-abstains:", full_filter_idx.sum())
+        # create onehot representation of LFs
+        lambda_oh = create_L_ind(lambda_tensor, n_classes)
+    else:
+        full_filter_idx = None
+        lambda_oh = None
+
+    # ------------------------
+    # Determine where to save random fake images (if any) at the end of training 
+    # ------------------------
+    fake_data_store = None
+    if max_n_fake > 0:
+        curr_dt = datetime.now()
+        timestamp = int(round(curr_dt.timestamp()))
+        if args.save_suffix:
+            fpath = "wsganlogs/fakedata/%s/%s/%d" % (
+                datasetsavename,
+                args.save_suffix,
+                timestamp,
+            )
+        else:
+            fpath = "wsganlogs/fakedata/%s/%d" % (datasetsavename, timestamp)
+
+        fpath = os.path.join(storedir, fpath)
+        os.makedirs(fpath, exist_ok=True)
+        fake_data_store = os.path.join(fpath, "fake_data.pt")
+        
+    # ------------------------
+    # INIT DATA MODULE
+    # ------------------------
+
+    dm = LFDataModule(
+        trainset_sub,
+        full_filter_idx,
+        trainlambda_oh=lambda_oh,
+        train_idxs = train_idxs,
+        trainlambda_bin=None,
+        validationdataset = testdataset,
+        testdataset=None,
+        lfmodelout=None,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        augment=args.augment,
+        augment_style=augment_style,
+        drop_last=drop_last,
+    )
+
+
+
+
+    if args.whichmodule == "GANLabelModel" :
+        # The WSGAN model using a simple DCGAN architecture
+        model = GANLabelModel(
+            num_LFs,
+            args.batch_size,
+            img_shape=img_shape,
+            architecture=architecture,
+            dlr=args.dlr,
+            glr=args.glr,
+            lmlr=args.lmlr,
+            ilr=args.ilr,
+            b1=args.b1,
+            b2=args.b2,
+            gclr=args.gclr,
+            dclr=args.dclr,
+            budget = args.budget,
+            alpha_weight = args.alpha_weight,
+            alpha_weight_subModular = args.alpha_weight_subModular,
+            beta_weight = args.beta_weight,
+            latent_dim=latent_dim,
+            latent_code_dim=n_classes,
+            encodertype=args.ganenctype,
+            class_balance=args.class_balance,
+            n_classes=n_classes,
+            decaylossterm=args.decaylossterm,
+            num_fake=max_n_fake,
+            epoch_generate=args.max_epochs - 1,
+            fake_data_store=fake_data_store,
+            decaylossparam=args.decaylossparam,
+            embedding = embedding,
+            train_idxs = train_idxs,
+            Lambdas = Lambdas
+        )
+    else:
+        raise NotImplementedError()
+
+
+    # ------------------------
+    # INIT TRAINER
+    # ------------------------
+    # set up logging
+    # https://pytorch-lightning.readthedocs.io/en/latest/api/pytorch_lightning.loggers.tensorboard.html
+
+    
+
+    if args.save_suffix:
+        foldername = "wsganlogs/%s/%s/" % (
+            datasetsavename,
+            args.save_suffix,
+        )
+    else:
+        foldername = "wsganlogs/%s/" % datasetsavename
+
+    logdir = os.path.join(storedir, foldername)
+    print(logdir, fake_data_store)
+    os.makedirs(logdir, exist_ok=True)
+
+    # TensorBoard logger
+    if (args.load_ckpt=='last') and (args.tb_logger_version is None):
+        tb_logger_version = pl_loggers.TensorBoardLogger(logdir, name=args.whichmodule)._get_next_version()-1 # set tb_logger to previous version already available
+        tb_logger_version = 0 if tb_logger_version==-1 else tb_logger_version
+        print(f'\nSaving to TensorBoard version_{tb_logger_version}, because --load_ckpt is set to last and tb_logger_version is not set\n')
+    else:
+        tb_logger_version = args.tb_logger_version
+
+    tb_logger = pl_loggers.TensorBoardLogger(
+        logdir,
+        name=args.whichmodule,
+        version=tb_logger_version
+    )
+
+    # create ModelCheckpoint object
+    checkpoint_callback = ModelCheckpoint(
+        every_n_epochs=args.epochs_per_ckpt,
+        filename='{epoch}',
+        save_top_k=-1, # NOTE: change this as required
+        save_on_train_epoch_end=True,
+        save_last=True
+    )
+    # set up trainer
+    trainer = Trainer(
+        gradient_clip_val=0.5,
+        accelerator='gpu', 
+        devices=args.gpus, # gpus IDs to use. NOTE: code was only tested on a single GPU.
+        logger=tb_logger,
+        max_epochs=args.max_epochs,
+        check_val_every_n_epoch=10,
+        strategy=DDPStrategy(process_group_backend="nccl") if len(args.gpus)>1 else None, # use ddp strategy for distributed training if there are more than 1 gpus
+        callbacks=[checkpoint_callback]
+    )
+    # ------------------------
+    # START GAN Model training
+    # ------------------------
+
+    trainer.fit(model, dm, ckpt_path=args.load_ckpt)
+    
+
+if __name__ == "__main__":
+    # python lightning/main.py --data_path /home/scratch/benediktb/data
+    parser = ArgumentParser()
+    parser.add_argument("--dataset", type=str, default="MNIST", help="dataset to load")
+    parser.add_argument(
+        "--data_path", type=str, default=os.getcwd(), help="dataset to load"
+    )
+    parser.add_argument(
+        "--lffname",
+        type=str,
+        default=None,
+        required=False,
+        help="path to precomputed LFs and training indexes",
+    )
+    parser.add_argument(
+        "--whichmodule",
+        type=str,
+        default="GANLabelModel",
+        help="Which WSGAN model to run: InfoGAN or GANLabelModel",
+    )
+
+    parser.add_argument(
+        "--imgsize",
+        type=int,
+        default=32,
+        help="Size of images. 32x32 or 64x64. Will only be changed for AwA2 and Domainnet",
+    )
+
+    parser.add_argument(
+        "--numlfs", type=int, default=40, help="number of labeling functions (LFs) to load from LF dataset"
+    )
+
+    parser.add_argument(
+        "--droplast", default=False, action="store_true", help="Drop last uneven batch"
+    )
+
+
+    # ------------------------
+    # Add DataLoader args
+    parser = LFDataModule.add_argparse_args(parser)
+
+    # Add model specific args
+    parser = GANLabelModel.add_argparse_args(parser)
+
+    ##########################
+    # GAN trainer args
+    ##########################
+    parser.add_argument("--gpus", nargs="+", type=int, help="GPU ids", required=True)
+    parser.add_argument("--max_epochs", type=int, help="Number of training epochs", default=150)
+
+    ##########################
+    # GAN labelmodel arguments
+    ##########################
+    parser.add_argument(
+        "--ganenctype",
+        type=str,
+        default="encoderX",
+        help="Type of encoder of GAN label model, one of: encoder, encoderX, encoderL, vector. Recommended: encoderX",
+    )
+
+
+    #########################
+    # path parameters
+    #########################
+    parser.add_argument(
+        "--storedir",
+        type=str,
+        required=True,
+        help="path to save logs, fake images , and checkpoints to",
+    )
+
+    parser.add_argument(
+        "--save_suffix",
+        type=str,
+        default="",
+        help="Suffix to append to logging folder for results",
+    )
+
+    ################################
+    # fake data parameters
+    ################################
+    parser.add_argument(
+        "-fk",
+        "--fake_data_sizes",
+        type=int,
+        nargs="+",
+        default=[0, 10000, 20000, 30000],
+        help="Fake datapoints to generate. Use like: -fk 0 1000 2000",
+    )
+
+    ################################
+    # checkpoint parameters
+    ################################
+    parser.add_argument(
+        '--epochs_per_ckpt',
+        type=int,
+        nargs='?',
+        default=50,
+        help='Checkpoint save frequency after a number of epochs'
+    )
+
+    parser.add_argument(
+        '--load_ckpt',
+        type=str,
+        nargs='?',
+        default=None,
+        help='Load checkpoint from a ckpt file like foo.ckpt (or) last'
+    )
+
+    ################################
+    # tensorboard logger parameters
+    ################################
+    parser.add_argument(
+        '--tb_logger_version',
+        type=int, # only supporting default version_{$version} type where version is int. string not supported
+        nargs='?',
+        default=None,
+        help='TensorBoardLogger version to use'
+    )
+
+    # Parse all arguments
+    args = parser.parse_args()
+
+    if len(args.gpus)>1:
+        torch.multiprocessing.set_start_method('spawn')
+
+    main(args)
