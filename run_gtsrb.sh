@@ -19,4 +19,4 @@ python lightning_subset/main_labelmodel.py\
  --budget 0.8\
  --beta_weight 0.7\
  --alpha_weight 0.3\
- --alpha_weight_subModular 2\
+ --alpha_weight_subModular 3.0\
