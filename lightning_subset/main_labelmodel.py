@@ -177,11 +177,7 @@ def main(args: Namespace) -> None:
         num_LFs = Lambdas.shape[1]
         datasetsavename = datasetsavename + "_%dlfs" % num_LFs
         trainset_sub = torch.utils.data.Subset(traindataset, train_idxs)
-
-        ## TODO :  assert to ensure that the test data is not same as train data 
-        # print
-        # train
-        #testset_sub = np.arange(traindataset)  
+ 
 
     # create a torch tensor of the LF outputs
     if Lambdas is not None:

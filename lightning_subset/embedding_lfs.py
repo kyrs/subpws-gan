@@ -18,8 +18,7 @@ import numpy as np
 import torch
 import warnings
 import torchvision
-# from lfpath_creation import subset_selection
-# from submodular_entropy import subset_selection_submodular
+import tqdm
 def get_embedder(embedding):
     if embedding == 'inceptionv3':
         embedder = Inceptionv3Embedding().eval().cuda()
@@ -32,14 +31,17 @@ def get_embedder(embedding):
 def get_embeddings_from_loader(dataloader,
                                embedder,
                                return_labels=False,
-                               verbose=False):
+                               verbose=True):
     embeddings = []
     labels = []
 
     with torch.no_grad():
         if verbose:
             dataloader = tqdm(dataloader, desc='Extracting embeddings')
+        i=0
         for data in dataloader:
+            i+=1
+            print(f"Processed image : {i}")
             if len(data) == 2:
                 images, label = data
                 images = images.cuda()  
@@ -58,7 +60,6 @@ def get_embeddings_from_loader(dataloader,
 
 
 def main(args: Namespace) -> None:
-    max_n_fake = int(max(args.fake_data_sizes))
     # name for subfolder to save to
     datasetsavename = args.dataset
     
@@ -114,7 +115,7 @@ def main(args: Namespace) -> None:
         assert(baseName == "train.json")
         embedPath = os.path.join(dirAdd, "train_embedding.pt")
         print(embedPath)
-        input()
+        # input()
 
         # set up datasets
         trainset_sub = JSONImageDataset(
@@ -165,22 +166,6 @@ def main(args: Namespace) -> None:
                 LF_propensity,
                 LF_labels,
             ) = torch.load(args.lffname, map_location=lambda storage, loc: storage)
-
-        # choose subset of LFs.
-        # Loaded LFs were already randomized, so choose by increasing index
-        # max_lfs = args.numlfs
-        # tmp_num_lfs = Lambdas.shape[1]
-        # if tmp_num_lfs > max_lfs:
-        #     lfidxs = np.arange(max_lfs)
-        #     print("Chosen LF indexes:\n", lfidxs)
-        #     Lambdas = Lambdas[:, lfidxs]
-        #     if isinstance(LF_accuracies, list):
-        #         LF_accuracies = np.array(LF_accuracies)
-        #     LF_accuracies = LF_accuracies[lfidxs]
-        # if tmp_num_lfs < max_lfs:
-        #     warnings.warn(
-        #         "WARNING: max number of LFs chosen greater than available number of LFs"
-        #     )
 
         num_LFs = Lambdas.shape[1]
         print(f"shape of lambdas : {num_LFs}")

@@ -31,9 +31,9 @@ class GraphCutSelectionGan(object):
         else:
             pass 
 
-        # train_idxs, Lambdas, embedding = self.__loadDetails()
+       
         examples, featureSize = embedding.shape
-        assert(len(train_idxs)== examples) ## basic checls to ensure correct embeddings are choosen 
+        assert(len(train_idxs)== examples) ## basic checks to ensure correct embeddings are choosen 
         lambda_tensor = torch.tensor(Lambdas, requires_grad=False).float()
         full_filter_idx = lambda_tensor.sum(1)!= 0 ## non abstrainIndex
         
@@ -45,7 +45,6 @@ class GraphCutSelectionGan(object):
         self.data = zip(train_idxs[full_filter_idx], Lambdas[full_filter_idx], embedding[full_filter_idx])
         ## defining model and calculating the pairwise distance
         if not self.returnAll:
-            # self.model = FacilityLocationSelection(budget, optimizer='lazy', metric = 'precomputed')
             totalElmSelect = np.ceil(self.budgetRatio * len(self.train_idxs_non_abstrained))
             self.totalElmSelect = totalElmSelect
             print(f"total element to select : {totalElmSelect}")
@@ -136,10 +135,3 @@ class GraphCutSelectionGan(object):
 
 if __name__ == "__main__":
     pass
-    # lfsPathTest = "/home/ece/hdd/weak_supervision/wsgan/subset_filter/ssl_cifar10B_complete_features.pt"
-    # obj = facilitySelectionGan(path_lfs_details = lfsPathTest)
-    # costDictTest = {}
-    # for idx in obj.train_idxs_non_abstrained:
-    #     val =  np.random.random((10,))
-    #     costDictTest[idx] = val/(sum(val))
-    # print(obj.returnSubset(costDictTest))

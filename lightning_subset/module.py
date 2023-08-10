@@ -38,11 +38,7 @@ def symmetric_cross_entropy(pred, labels, beta = 0.7, alpha = 0.3):
 
     # # Loss
     loss = beta * ce + alpha * rce.mean()
-    #print(f"loss val : {ce} rce value :{rce.mean()} loss : {loss} ")
-    #input()
     return loss 
-    # beta = 0.8
-    # return beta * F.cross_entropy(pred, labels) + (1-beta) * F.cross_entropy(labels, pred)
     
 class LightningGAN(LightningModule):
     def __init__(
@@ -198,7 +194,6 @@ class LightningGAN(LightningModule):
             )
 
         if self.lrscheduler:
-            # TODO add epochs as hyper parameter
             g_schedule = get_linear_lr_schedule(glr, n_epochs=200, minlr=1e-7)
             g_scheduler = torch.optim.lr_scheduler.LambdaLR(
                 opt_g, g_schedule, verbose=True
@@ -547,7 +542,7 @@ class GANLabelModel(LightningGAN):
             parser = ArgumentParser(parents=[parent_parser], add_help=False)
             parser_out = parser
         parser.add_argument(
-            "--ilr", type=float, default=0.0001, help="adam learning rate for info term"
+            "--ilr", type=float, default=0.0001, help="adam learning rate"
         )
         parser.add_argument(
             "--dlr",
@@ -655,7 +650,7 @@ class GANLabelModel(LightningGAN):
             help="dimensionality of the discrete code space",
         )
         parser.add_argument(
-            "--lmda", type=float, default=0.1, help="lambda for discrete code info loss"
+            "--lmda", type=float, default=0.1, help="lambda for discrete code "
         )
         parser.add_argument(
             "--decaylossterm",
@@ -689,7 +684,7 @@ class GANLabelModel(LightningGAN):
             "--alpha_weight_subModular",
             default=2,
             type=float,
-            help=" Value of the alpha in graph cut submodular. Note : apricot trat alpha seprately compared to other submodular function",
+            help=" Value of the alpha in graph cut submodular. Note : apricot treates alpha differently compared to other submodular function",
             required=False,
         )
 
@@ -722,26 +717,7 @@ class GANLabelModel(LightningGAN):
                 self.discriminator.parameters(), lr=dlr, betas=(b1, b2)
             )
 
-        # opt_info = torch.optim.Adam(
-        #     itertools.chain(
-        #         self.discriminator.parameters(), self.generator.parameters()
-        #     ),
-        #     lr=ilr,
-        #     betas=(b1, b2),
-        # )
-
-
-        # opt_lf = torch.optim.Adam(
-        #     itertools.chain(
-        #         self.discriminator.parameters(),
-        #         self.encoderlabelmodel.parameters(),
-        #         self.fone.parameters(),
-        #         self.ftwo.parameters(),
-        #     ),
-        #     lr=lmlr,
-        #     betas=(b1, b2),
-        # )
-
+        
         opt_lf = torch.optim.Adam(
             itertools.chain(
                 self.encoderlabelmodel.parameters(),
@@ -778,7 +754,6 @@ class GANLabelModel(LightningGAN):
         #     betas=(b1, b2),
         # )
         if self.lrscheduler:
-            # TODO add epochs as hyper parameter
             g_schedule = get_linear_lr_schedule(glr, n_epochs=200, minlr=glr * 0.01)
             g_scheduler = torch.optim.lr_scheduler.LambdaLR(
                 opt_g, g_schedule, verbose=True
@@ -789,10 +764,6 @@ class GANLabelModel(LightningGAN):
                 opt_d, d_schedule, verbose=True
             )
 
-            # i_schedule = get_linear_lr_schedule(ilr, n_epochs=200, minlr=ilr * 0.01)
-            # i_scheduler = torch.optim.lr_scheduler.LambdaLR(
-            #     opt_info, i_schedule, verbose=True
-            # )
 
             lf_schedule = get_linear_lr_schedule(lmlr, n_epochs=200, minlr=lmlr * 0.01)
             lf_scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -815,7 +786,7 @@ class GANLabelModel(LightningGAN):
             )
         else:
 
-            return [opt_d, opt_g, opt_genC, opt_lf, opt_disC], [] # NOTE : double check the changes and alignment of given opt with loss 
+            return [opt_d, opt_g, opt_genC, opt_lf, opt_disC], [] 
         
 
     def get_conditional_label(self, imgs):
@@ -937,7 +908,7 @@ class GANLabelModel(LightningGAN):
                 # self.ftwo(yestimate), latent_GAN_code.detach()
                 # )
 
-                lfloss = soft_cross_entropy(self.ftwo(yestimate), latent_GAN_code.detach()) ### NOTE : New modification for testig the code wth simple alignment 07/5/2023 TODO : if this work then remove the class label in image save
+                lfloss = soft_cross_entropy(self.ftwo(yestimate), latent_GAN_code.detach()) 
                 
                 tqdm_dict = {"lfloss": lfloss}
                 if self.decaylossterm>0.0:
@@ -1019,7 +990,6 @@ class GANLabelModel(LightningGAN):
 
         elif optimizer_idx == 4 : 
             if self.current_epoch >=1:
-                #TODO : FLAGS for hyperpaprameter  tuning (Budget and optimizer_4 training)
                 trainIdxList =  batch["trainidxlist"]
                 correct_y = batch["y"]
                 lambdas = batch["oh_lfs"]
@@ -1034,7 +1004,6 @@ class GANLabelModel(LightningGAN):
                 subModularFlagList = torch.tensor(subModularFlagList)
 
                 assert(len(subModularFlagList) == len(trainIdxList))
-                # subModularFlagList = [True  for elm in trainIdxList if elm in self.filterSubmodularDict else]   ## TODO :  put assert to maintain ordering   
                 filtersum = subModularFlagList.sum()
                 if filtersum > 0:
                     imgs_filtered = imgs[subModularFlagList]
@@ -1043,7 +1012,6 @@ class GANLabelModel(LightningGAN):
                     psuedoLabel_filtered = [self.filterSubmodularDict[elm] for elm in trainIdxFilterList]
                     psuedoLabel_filtered = torch.tensor(psuedoLabel_filtered).to(self.device)
                     lambdas = lambdas[subModularFlagList]
-                    ## TODO : check the association with the actual labels
                     pred_logit = self.discriminator.predict_code(
                         imgs_filtered) ### working with the predict code itself 
                     pred_loss = symmetric_cross_entropy(pred_logit, psuedoLabel_filtered, alpha = self.alpha_weight, beta = self.beta_weight)
@@ -1073,19 +1041,6 @@ class GANLabelModel(LightningGAN):
         on_step=False,
         on_epoch=True
         )
-        ### calculate F(Q(x)) 
-
-        # probVal = self.get_prob_labels_q(imgs_val)
-        # _, pred_class_fq = torch.max(probVal, 1)
-        # pred_class_fq = pred_class_fq.detach()
-        # self.val_accuracy_type2(pred_class_fq, label_val)
-        # # acc_fq =  (label_val == pred_class_fq).float().mean()
-        # # print(acc_fq)
-        # self.log("val_fq_acc", 
-        # self.val_accuracy_type2,
-        # on_step=False,
-        # on_epoch=True
-        # )
         return None
 
 
@@ -1094,7 +1049,7 @@ class GANLabelModel(LightningGAN):
         print ("train epoch ended ..")
         self.filterSubmodularDict = {} #### Flushing the old values and putting in new values
         assert(len(self.filterSubmodularDict) == 0)
-        self.filterSubmodularDict =  self.submodularModel.returnSubset(self.probIndxDict) ## inplace update (Check for BUG TODO)
+        self.filterSubmodularDict =  self.submodularModel.returnSubset(self.probIndxDict) 
         assert(len(self.filterSubmodularDict)>0)
 
         if self.current_epoch == self.epoch_generate:
