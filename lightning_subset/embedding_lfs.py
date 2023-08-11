@@ -1,6 +1,5 @@
 import os
 import sys 
-# sys.path.insert(1, '/home/ece/hdd/weak_supervision/wsgan') 
 from datetime import datetime
 from embeddings import *
 from pytorch_lightning import loggers as pl_loggers
