@@ -1,4 +1,5 @@
 # subpws-gan
+We have made use of the WSGAN code from Benedikt Boecking's repo https://github.com/benbo/WSGAN-paper and modified according to our needs.
 
 ## Installation
 ```bash
