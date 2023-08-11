@@ -103,7 +103,7 @@ sentence-transformers==2.2.2
 sentencepiece==0.1.97
 seqeval==1.2.2
 six==1.16.0
-sklearn==0.0.post3
+#sklearn==0.0.post3
 skweak==0.3.3
 smart-open==6.3.0
 snorkel==0.9.9

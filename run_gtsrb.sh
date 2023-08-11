@@ -6,7 +6,7 @@ python lightning_subset/main_labelmodel.py\
  --dataset GTSRB\
  --gpus 1\
  --batch_size 16\
- --lffname $WSGAN_PATH/lf_files/ssl_GTSRB_complete_features.pt\
+ --lffname $WSGAN_PATH/subset_filter/ssl_lfsGTSRB_inceptionv3_complete_features.pt\
  --numlfs 100\
  --max_epochs 200\
  --whichmodule GANLabelModel\
