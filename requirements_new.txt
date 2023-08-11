@@ -1,8 +1,0 @@
---extra-index-url https://download.pytorch.org/whl/cu116
-torch==1.13.1+cu116
-torchvision==0.14.1+cu116
-scikit-learn==1.2.1
-pytorch-lightning==1.9.4
-torch-fidelity==0.3.0
-tensorboard
-apricot-select
